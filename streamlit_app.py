@@ -7,6 +7,8 @@ import base64
 import re
 import requests
 import time
+from pytube import YouTube
+import os
 
 def extract_video_id(url):
     """YouTube URL'sinden video ID'sini çıkarır."""
@@ -22,7 +24,41 @@ def extract_video_id(url):
     
     return None
 
+def get_transcript_pytube(video_url):
+    """Pytube kütüphanesi kullanarak altyazı alır."""
+    try:
+        yt = YouTube(video_url)
+        caption_tracks = yt.captions
+        
+        # Önce Türkçe veya İngilizce altyazıları deneyelim
+        caption = None
+        for c in caption_tracks:
+            code = c.code.split('.')[0]  # 'a.en' -> 'a'
+            if code in ['tr', 'en']:
+                caption = c
+                break
+        
+        # Eğer bulamazsak, ilk altyazıyı kullanalım
+        if caption is None and len(caption_tracks) > 0:
+            caption = caption_tracks[0]
+        
+        if caption is None:
+            return "Hata: Bu video için altyazı bulunamadı.", None
+        
+        # XML altyazıyı alalım ve metni çıkaralım
+        xml_captions = caption.xml_captions
+        
+        # Basit bir XML parser ile metni çıkaralım
+        # Bu çok basit bir parser - gerçek kullanımda daha gelişmiş bir XML parser kullanılmalı
+        clean_text = re.sub(r'<.*?>', '', xml_captions)
+        clean_text = re.sub(r'\n', ' ', clean_text)
+        
+        return clean_text, extract_video_id(video_url)
+    except Exception as e:
+        return f"Pytube ile altyazı alınırken hata: {str(e)}", None
+
 def get_transcript(video_url):
+    """Ana transkript alma fonksiyonu - birden fazla yöntem dener."""
     try:
         video_id = extract_video_id(video_url)
         if not video_id:
@@ -34,20 +70,27 @@ def get_transcript(video_url):
         # Önce İngilizce ve Türkçe dil seçenekleriyle deneyelim
         try:
             transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'tr'])
-        except Exception as e:
-            # İlk denemede başarısız olursa tüm dilleri deneyelim
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        
-        raw_text = " ".join([entry['text'] for entry in transcript])
-        return raw_text, video_id
-    except TranscriptsDisabled:
-        return "Hata: Bu video için altyazılar devre dışı bırakılmış.", None
-    except NoTranscriptFound:
-        return "Hata: Bu video için transkript bulunamadı. Video sahibi tarafından eklenmiş altyazı olmayabilir.", None
-    except VideoUnavailable:
-        return "Hata: Video kullanılamıyor veya özel olabilir.", None
-    except TooManyRequests:
-        return "Hata: YouTube API'den çok fazla istek yapıldı. Lütfen daha sonra tekrar deneyin veya IP kısıtlamaları nedeniyle videoyu yerel olarak indirmeyi deneyin.", None
+            raw_text = " ".join([entry['text'] for entry in transcript])
+            return raw_text, video_id
+        except Exception as youtube_api_error:
+            # YouTube API başarısız olursa pytube'u deneyelim
+            st.warning("YouTube Transcript API ile transkript alınamadı. Alternatif yöntem deneniyor...")
+            transcript_text, video_id = get_transcript_pytube(video_url)
+            
+            if not transcript_text.startswith("Hata") and not transcript_text.startswith("Pytube"):
+                return transcript_text, video_id
+            else:
+                # Pytube da başarısız olursa, ilk hatayı detaylandırarak döndürelim
+                if isinstance(youtube_api_error, TranscriptsDisabled):
+                    return "Hata: Bu video için altyazılar devre dışı bırakılmış.", None
+                elif isinstance(youtube_api_error, NoTranscriptFound):
+                    return "Hata: Bu video için transkript bulunamadı. Video sahibi tarafından eklenmiş altyazı olmayabilir.", None
+                elif isinstance(youtube_api_error, VideoUnavailable):
+                    return "Hata: Video kullanılamıyor veya özel olabilir.", None
+                elif isinstance(youtube_api_error, TooManyRequests):
+                    return "Hata: YouTube API'den çok fazla istek yapıldı. Lütfen daha sonra tekrar deneyin veya IP kısıtlamaları nedeniyle videoyu yerel olarak indirmeyi deneyin.", None
+                else:
+                    return f"Beklenmeyen bir hata oluştu: {str(youtube_api_error)}", None
     except Exception as e:
         return f"Beklenmeyen bir hata oluştu: {str(e)}", None
 
@@ -81,7 +124,7 @@ st.title("YouTube Video Transkripti")
 st.markdown("YouTube video URL'sini girin ve transkripti alın.")
 
 # IP uyarısı
-st.info("⚠️ Not: Eğer 'Too Many Requests' hatası alıyorsanız, YouTube IP kısıtlaması uygulanmış olabilir. Bu durumda uygulamayı yerel bilgisayarınızda çalıştırmayı deneyin.")
+st.info("⚠️ Not: YouTube API sorunları durumunda otomatik olarak alternatif yöntemler denenecektir. Herhangi bir sorun yaşarsanız, uygulamayı yerel bilgisayarınızda çalıştırmayı deneyin.")
 
 # Ana içerik
 col1, col2 = st.columns([1, 2])
@@ -148,9 +191,9 @@ with expander:
     
     3. **YouTube Premium aboneliği** ile bazı kısıtlamalar azaltılabilir.
     
-    4. **Farklı bir transkript API'si kullanın**: Proje açık kaynaklı olduğu için kodu değiştirip farklı bir API kullanabilirsiniz.
+    4. **Uygulama artık otomatik olarak alternatif yöntemleri dener**: İlk yöntem başarısız olursa, uygulama otomatik olarak pytube kütüphanesini kullanarak transkript almayı dener.
     """)
 
 # Alt bilgi
 st.markdown("---")
-st.markdown("YouTube Transkript Uygulaması | [GitHub](https://github.com/kullaniciadi/youtube-transcript)")
+st.markdown("YouTube Transkript Uygulaması | [GitHub](https://github.com/suskun354/youtube-transcript)")
